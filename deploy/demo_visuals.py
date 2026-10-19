@@ -76,9 +76,9 @@ def render_regions(image, boxes, masks, labels, triplets, title):
     width, height = round(image.width * scale), round(image.height * scale)
     preview = overlay.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
     anchors = [(x * scale, y * scale) for x, y in anchors]
-    font = _font(22)
-    relation_font = _font(50)
-    line_height = 68
+    font = _font(18)
+    relation_font = _font(18)
+    line_height = 26
     draw = ImageDraw.Draw(preview)
     for idx, box in enumerate(boxes):
         _badge(draw, (float(box[0]) * scale, float(box[1]) * scale),
@@ -114,7 +114,7 @@ def render_regions(image, boxes, masks, labels, triplets, title):
     if not legend:
         legend = [("No relations returned." if len(boxes) >= 2 else
                    "Fewer than two objects: no relations to predict.", (220, 225, 235))]
-    header = 48
+    header = 40
     canvas = Image.new("RGB", (width, height + header + 18 + line_height*len(legend)), (15, 20, 30))
     canvas.paste(preview, (0, header))
     draw = ImageDraw.Draw(canvas)
