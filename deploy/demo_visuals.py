@@ -75,8 +75,8 @@ def render_regions(image, boxes, masks, labels, triplets, title):
     preview = overlay.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
     anchors = [(x * scale, y * scale) for x, y in anchors]
     font = _font(22)
-    relation_font = _font(50)
-    line_height = 68
+    relation_font = _font(200)
+    line_height = 260
     draw = ImageDraw.Draw(preview)
     for idx, box in enumerate(boxes):
         _badge(draw, (float(box[0]) * scale, float(box[1]) * scale),
