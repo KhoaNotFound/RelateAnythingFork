@@ -94,7 +94,7 @@ def main():
     source.add_argument("--images", nargs="+", type=Path)
     source.add_argument("--image-dir", type=Path, help="Recursively read images outside or inside the repo")
     parser.add_argument("--output-dir", type=Path, default=Path("runs/demo_output"))
-    parser.add_argument("--detector", default="yolo26x-seg.pt")
+    parser.add_argument("--detector", default="yoloe-26m-seg-pf.pt")
     parser.add_argument("--model", default="maelic/relsgg-vits16plus")
     parser.add_argument("--topk", type=int, default=3)
     args = parser.parse_args()
