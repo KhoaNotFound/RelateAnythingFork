@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 import threading
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from demo import (collect_images, iter_detected, output_base, predict_relations,
                   save_outputs, select_devices)
@@ -116,6 +116,25 @@ class DemoTests(unittest.TestCase):
         preview = render_regions(Image.new("RGB", (100, 80)), np.zeros((0, 4)),
                                  np.zeros((0, 80, 100), bool), [], [], "No detections")
         self.assertEqual(preview.mode, "RGB")
+
+    def test_font_size_is_preserved_without_system_fonts(self):
+        from PIL import ImageFont
+        from deploy.demo_visuals import _font
+
+        original = ImageFont.truetype
+
+        def missing_system_font(font, *args, **kwargs):
+            if isinstance(font, (str, Path)):
+                raise OSError("System font unavailable")
+            # Pillow's bundled fallback is loaded from an in-memory font.
+            return original(font, *args, **kwargs)
+
+        with patch("deploy.demo_visuals.ImageFont.truetype", side_effect=missing_system_font):
+            small, large = _font(18), _font(200)
+        text = "holding [0.850]"
+        small_bounds, large_bounds = small.getbbox(text), large.getbbox(text)
+        self.assertGreater(large_bounds[3] - large_bounds[1],
+                           6 * (small_bounds[3] - small_bounds[1]))
 
 
 if __name__ == "__main__":

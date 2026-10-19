@@ -15,7 +15,9 @@ def _font(size):
             return ImageFont.truetype(name, size)
         except OSError:
             pass
-    return ImageFont.load_default()
+    # Kaggle may not have DejaVu installed. Keep the requested size when
+    # falling back; load_default() without size silently uses a tiny font.
+    return ImageFont.load_default(size=size)
 
 
 def _color(index):
