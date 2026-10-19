@@ -74,7 +74,9 @@ def render_regions(image, boxes, masks, labels, triplets, title):
     width, height = round(image.width * scale), round(image.height * scale)
     preview = overlay.convert("RGB").resize((width, height), Image.Resampling.LANCZOS)
     anchors = [(x * scale, y * scale) for x, y in anchors]
-    font = _font(18)
+    font = _font(22)
+    relation_font = _font(28)
+    line_height = 40
     draw = ImageDraw.Draw(preview)
     for idx, box in enumerate(boxes):
         _badge(draw, (float(box[0]) * scale, float(box[1]) * scale),
@@ -103,20 +105,20 @@ def render_regions(image, boxes, masks, labels, triplets, title):
         wings = [tuple(tip - 15*np.array([math.cos(angle+a), math.sin(angle+a)]))
                  for a in (-0.45, 0.45)]
         draw.polygon([tuple(tip), *wings], fill=color)
-        _badge(draw, points[len(points)//2], str(number), font, color, width)
+        _badge(draw, points[len(points)//2], str(number), relation_font, color, width)
         text = (f"{number}. #{si} {labels[si]} -> {triplet.predicate} "
                 f"[{triplet.score:.3f}] -> #{oi} {labels[oi]}")
-        legend.extend((line, color) for line in _wrap(draw, text, font, width-32))
+        legend.extend((line, color) for line in _wrap(draw, text, relation_font, width-32))
     if not legend:
         legend = [("No relations returned." if len(boxes) >= 2 else
                    "Fewer than two objects: no relations to predict.", (220, 225, 235))]
-    header = 40
-    canvas = Image.new("RGB", (width, height + header + 18 + 26*len(legend)), (15, 20, 30))
+    header = 48
+    canvas = Image.new("RGB", (width, height + header + 18 + line_height*len(legend)), (15, 20, 30))
     canvas.paste(preview, (0, header))
     draw = ImageDraw.Draw(canvas)
     draw.text((12, 8), title, font=font, fill="white")
     for row, (line, color) in enumerate(legend):
-        draw.text((12, header+height+8+row*26), line, font=font, fill=color)
+        draw.text((12, header+height+8+row*line_height), line, font=relation_font, fill=color)
     return canvas
 
 
