@@ -97,7 +97,8 @@ def main():
     source.add_argument("--image-dir", type=Path, help="Recursively read images outside or inside the repo")
     parser.add_argument("--output-dir", type=Path, default=Path("runs/demo_output"))
     parser.add_argument("--detector", default="yoloe-26m-seg-pf.pt")
-    parser.add_argument("--segmenter", choices=["mask2former", "sam3", "yolo"], default="mask2former")
+    parser.add_argument("--segmenter", choices=["mask2former", "rfdetr", "sam3", "yolo"], default="mask2former")
+    parser.add_argument("--rfdetr-size", choices=["nano", "small", "medium", "large"], default="medium")
     parser.add_argument("--mask2former-model", default="facebook/mask2former-swin-small-coco-panoptic")
     parser.add_argument("--sam3-model", default="facebook/sam3")
     parser.add_argument("--sam3-prompts", nargs="+",
@@ -144,7 +145,10 @@ def main():
     def detect(path):
         nonlocal detector
         if detector is None:
-            if args.segmenter == "mask2former":
+            if args.segmenter == "rfdetr":
+                from deploy.rfdetr_segmenter import RFDETRSegmenter
+                detector = RFDETRSegmenter(args.rfdetr_size, detector_device)
+            elif args.segmenter == "mask2former":
                 from deploy.mask2former_segmenter import Mask2FormerSegmenter
                 detector = Mask2FormerSegmenter(args.mask2former_model, detector_device)
             elif args.segmenter == "sam3":
@@ -157,7 +161,7 @@ def main():
                     raise ValueError("--detector must be an instance-segmentation checkpoint")
         with Image.open(path) as source:
             image = source.convert("RGB")
-        if args.segmenter in {"sam3", "mask2former"}:
+        if args.segmenter in {"sam3", "mask2former", "rfdetr"}:
             boxes, masks, labels = detector(image)
             return path, image, boxes, masks, labels
         detections = detector.predict(
@@ -184,6 +188,7 @@ def main():
     # Keep the full vocabulary for both predictions; do not call set_vocabulary.
     settings = dict(segmenter=args.segmenter,
                     detector={"sam3": args.sam3_model, "mask2former": args.mask2former_model,
+                              "rfdetr": f"RFDETRSeg{args.rfdetr_size.title()}",
                               "yolo": args.detector}[args.segmenter],
                     sam3_prompts=args.sam3_prompts if args.segmenter == "sam3" else None,
                     relation_model=args.model,
