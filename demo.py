@@ -4,6 +4,11 @@
     python demo.py --images photo1.jpg photo2.jpg photo3.jpg
     python demo.py --segmenter sam3 --sam3-prompts person horse --images photo.jpg
     python demo.py --segmenter yolo --detector yoloe-26m-seg-pf.pt
+    python demo.py --benchmark --image-dir /path/to/images
+
+On Kaggle, a bare invocation compares three segmenters on
+/kaggle/working/data/02_2_3_obj (also accepts 02_2_3obj) and writes an HTML report.
+Use notebooks/segmentation_benchmark.ipynb to display it below the run cell.
 
 With two visible GPUs, segmentation uses GPU 0 and relations use GPU 1.
 For one image the stages are sequential; with multiple images detection of
@@ -15,6 +20,22 @@ from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
+import sys
+import time
+
+
+def synchronize(device):
+    import torch
+    if str(device).startswith("cuda"):
+        torch.cuda.synchronize(device)
+
+
+def kaggle_image_dir():
+    root = Path("/kaggle/working/data")
+    for name in ("02_2_3_obj", "02_2_3obj"):
+        if (root / name).is_dir():
+            return root / name
+    raise ValueError("Cannot find /kaggle/working/data/02_2_3_obj (or 02_2_3obj); use --image-dir")
 
 
 def select_devices(gpu_count):
@@ -88,10 +109,13 @@ def save_outputs(image, boxes, masks, labels, predictions, base, source, setting
     path.write_text(json.dumps(result, indent=2, ensure_ascii=False,
                                default=lambda value: value.tolist()), encoding="utf-8")
     print(f"Saved: {visuals['relations']}")
+    return path
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--benchmark", action="store_true", help="Compare YOLOE, Mask2Former and RF-DETR on the same images")
+    parser.add_argument("--measure", action="store_true", help=argparse.SUPPRESS)
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--images", nargs="+", type=Path)
     source.add_argument("--image-dir", type=Path, help="Recursively read images outside or inside the repo")
@@ -108,6 +132,16 @@ def main():
     parser.add_argument("--model", default="maelic/relsgg-vits16plus")
     parser.add_argument("--topk", type=int, default=3)
     args = parser.parse_args()
+    # A bare invocation in Kaggle runs the requested three-model comparison.
+    if len(sys.argv) == 1 and Path("/kaggle/working").is_dir():
+        args.benchmark = True
+    if args.benchmark and args.images is None and args.image_dir is None:
+        try:
+            args.image_dir = kaggle_image_dir()
+        except ValueError as error:
+            parser.error(str(error))
+    if args.benchmark and args.output_dir == Path("runs/demo_output"):
+        args.output_dir = Path("/kaggle/working/segmentation_benchmark") if Path("/kaggle/working").is_dir() else Path("runs/segmentation_benchmark")
     if args.topk < 1:
         parser.error("--topk must be positive")
     if args.segmenter == "sam3" and not any(p.strip() for p in args.sam3_prompts):
@@ -120,6 +154,10 @@ def main():
     # Do not recursively pick up prior output images on a subsequent run.
     if args.image_dir and resolved_output.is_relative_to(args.image_dir.resolve()):
         parser.error("--output-dir must be outside --image-dir")
+    if args.benchmark:
+        from deploy.segmentation_benchmark import run_benchmark
+        run_benchmark(args, paths)
+        return
 
     from PIL import Image
     import numpy as np
@@ -136,11 +174,12 @@ def main():
         print("Two GPUs are not visible; using the available GPU or CPU.")
     if len(paths) == 1:
         print("One image: stages use their assigned devices sequentially.")
-    else:
+    elif not args.measure:
         print("Pipelining next-image segmentation with current-image relations.")
 
     # The detector is created and used exclusively by the single worker.
     detector = None
+    detection_ms = {}
 
     def detect(path):
         nonlocal detector
@@ -161,16 +200,24 @@ def main():
                     raise ValueError("--detector must be an instance-segmentation checkpoint")
         with Image.open(path) as source:
             image = source.convert("RGB")
+        if args.measure:
+            synchronize(detector_device)
+            started = time.perf_counter()
+        def finish(boxes, masks, labels):
+            if args.measure:
+                synchronize(detector_device)
+                detection_ms[path] = (time.perf_counter() - started) * 1000
+            return path, image, boxes, masks, labels
         if args.segmenter in {"sam3", "mask2former", "rfdetr"}:
             boxes, masks, labels = detector(image)
-            return path, image, boxes, masks, labels
+            return finish(boxes, masks, labels)
         detections = detector.predict(
             image, device=detector_device, conf=0.4, max_det=60,
             retina_masks=True, verbose=False,
         )[0]
         if detections.boxes is None or len(detections.boxes) == 0:
-            return (path, image, np.zeros((0, 4), dtype=np.float32),
-                    np.zeros((0, image.height, image.width), dtype=bool), [])
+            return finish(np.zeros((0, 4), dtype=np.float32),
+                          np.zeros((0, image.height, image.width), dtype=bool), [])
         if detections.masks is None:
             raise ValueError(f"{path}: no masks returned; refusing to silently use boxes only")
         # GPU inference is complete; the public relation API takes NumPy inputs.
@@ -179,7 +226,7 @@ def main():
         if masks.shape != (len(boxes), image.height, image.width):
             raise ValueError(f"{path}: masks do not align with boxes/original image")
         labels = [detections.names[int(c)] for c in detections.boxes.cls.cpu().tolist()]
-        return path, image, boxes, masks, labels
+        return finish(boxes, masks, labels)
 
     model = RelateAnything.from_pretrained(
         args.model, device=relation_device, full_vocabulary=True,
@@ -195,13 +242,22 @@ def main():
                     detector_device=detector_device, relation_device=relation_device,
                     full_vocabulary=True, vocabulary_size=len(model.predicates),
                     topk=args.topk, detector_conf=0.4)
-    for path, image, boxes, masks, labels in iter_detected(paths, detect):
+    detected = map(detect, paths) if args.measure else iter_detected(paths, detect)
+    for index, (path, image, boxes, masks, labels) in enumerate(detected):
         print(f"\nImage: {path}")
+        if args.measure:
+            synchronize(relation_device)
+            started = time.perf_counter()
         if len(boxes) < 2:
             print("Fewer than two objects detected; no relations to predict.")
             predictions = {"relations": [], "spatial": [], "semantic": []}
         else:
             predictions = predict_relations(model, image, boxes, masks, labels, args.topk)
+        if args.measure:
+            synchronize(relation_device)
+            settings = dict(settings, segmentation_ms=detection_ms[path],
+                            relation_ms=(time.perf_counter() - started) * 1000,
+                            first_image=index == 0)
         base = output_base(path, args.image_dir, args.output_dir)
         save_outputs(image, boxes, masks, labels, predictions, base, path, settings)
 

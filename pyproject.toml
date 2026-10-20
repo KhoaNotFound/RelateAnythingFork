@@ -48,6 +48,7 @@ train = ["scikit-learn~=1.9", "pyarrow>=17"]
 detector = ["ultralytics~=8.4"]
 # Optional image-only instance segmentation backend for demo.py.
 rfdetr = ["rfdetr==1.11.0"]
+benchmark = ["ultralytics~=8.4", "rfdetr==1.11.0"]
 # MegaSG annotation generation (vLLM pipeline; heavy, GPU-only, not needed to
 # train or run RelSGG). These were previously CORE dependencies, which made
 # every fresh install build autoawq — moved here.
