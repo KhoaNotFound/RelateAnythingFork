@@ -2,6 +2,8 @@
 
     python demo.py
     python demo.py --images photo1.jpg photo2.jpg photo3.jpg
+    python demo.py --segmenter sam3 --sam3-prompts person horse --images photo.jpg
+    python demo.py --segmenter yolo --detector yoloe-26m-seg-pf.pt
 
 With two visible GPUs, segmentation uses GPU 0 and relations use GPU 1.
 For one image the stages are sequential; with multiple images detection of
@@ -95,11 +97,20 @@ def main():
     source.add_argument("--image-dir", type=Path, help="Recursively read images outside or inside the repo")
     parser.add_argument("--output-dir", type=Path, default=Path("runs/demo_output"))
     parser.add_argument("--detector", default="yoloe-26m-seg-pf.pt")
+    parser.add_argument("--segmenter", choices=["mask2former", "sam3", "yolo"], default="mask2former")
+    parser.add_argument("--mask2former-model", default="facebook/mask2former-swin-small-coco-panoptic")
+    parser.add_argument("--sam3-model", default="facebook/sam3")
+    parser.add_argument("--sam3-prompts", nargs="+",
+                        default=["person", "horse", "dog", "cat", "car", "bicycle",
+                                 "motorcycle", "chair", "table", "cup", "bottle", "bag", "tree"],
+                        help="Object concepts to segment (quote multiword phrases)")
     parser.add_argument("--model", default="maelic/relsgg-vits16plus")
     parser.add_argument("--topk", type=int, default=3)
     args = parser.parse_args()
     if args.topk < 1:
         parser.error("--topk must be positive")
+    if args.segmenter == "sam3" and not any(p.strip() for p in args.sam3_prompts):
+        parser.error("--sam3-prompts needs at least one nonempty object concept")
     try:
         paths = collect_images(args.images, args.image_dir)
     except ValueError as error:
@@ -112,7 +123,6 @@ def main():
     from PIL import Image
     import numpy as np
     import torch
-    from ultralytics import YOLO
     from relsgg import RelateAnything
 
     gpu_count = torch.cuda.device_count()
@@ -134,11 +144,22 @@ def main():
     def detect(path):
         nonlocal detector
         if detector is None:
-            detector = YOLO(args.detector)
-            if detector.task != "segment":
-                raise ValueError("--detector must be an instance-segmentation checkpoint")
+            if args.segmenter == "mask2former":
+                from deploy.mask2former_segmenter import Mask2FormerSegmenter
+                detector = Mask2FormerSegmenter(args.mask2former_model, detector_device)
+            elif args.segmenter == "sam3":
+                from deploy.sam3_segmenter import Sam3Segmenter
+                detector = Sam3Segmenter(args.sam3_model, detector_device, args.sam3_prompts)
+            else:
+                from ultralytics import YOLO
+                detector = YOLO(args.detector)
+                if detector.task != "segment":
+                    raise ValueError("--detector must be an instance-segmentation checkpoint")
         with Image.open(path) as source:
             image = source.convert("RGB")
+        if args.segmenter in {"sam3", "mask2former"}:
+            boxes, masks, labels = detector(image)
+            return path, image, boxes, masks, labels
         detections = detector.predict(
             image, device=detector_device, conf=0.4, max_det=60,
             retina_masks=True, verbose=False,
@@ -161,7 +182,11 @@ def main():
     )
     print(f"Relation vocabulary: {len(model.predicates)} predicates")
     # Keep the full vocabulary for both predictions; do not call set_vocabulary.
-    settings = dict(detector=args.detector, relation_model=args.model,
+    settings = dict(segmenter=args.segmenter,
+                    detector={"sam3": args.sam3_model, "mask2former": args.mask2former_model,
+                              "yolo": args.detector}[args.segmenter],
+                    sam3_prompts=args.sam3_prompts if args.segmenter == "sam3" else None,
+                    relation_model=args.model,
                     detector_device=detector_device, relation_device=relation_device,
                     full_vocabulary=True, vocabulary_size=len(model.predicates),
                     topk=args.topk, detector_conf=0.4)
