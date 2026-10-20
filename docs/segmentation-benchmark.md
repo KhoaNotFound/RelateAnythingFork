@@ -6,16 +6,37 @@ Use the existing RelSGG environment, enable Internet and GPU, and pull branch
 In a Kaggle notebook cell:
 
 ```python
-%cd /kaggle/working/RelateAnythingFork
-!git pull origin test
-!uv sync --extra benchmark
-!uv run demo.py
-
 from pathlib import Path
+import subprocess
 from IPython.display import HTML, display
-report = Path('/kaggle/working/segmentation_benchmark/latest_report.txt').read_text().strip()
+
+repo = Path('/kaggle/working/RelateAnythingFork')
+subprocess.run(['git', 'pull', '--ff-only', 'origin', 'test'], cwd=repo, check=True)
+subprocess.run(['uv', 'sync', '--extra', 'benchmark'], cwd=repo, check=True)
+subprocess.run(['uv', 'run', '--extra', 'benchmark', 'demo.py', '--benchmark'], cwd=repo, check=True)
+pointer = Path('/kaggle/working/segmentation_benchmark/latest_report.txt')
+if not pointer.is_file():
+    raise RuntimeError('Benchmark did not generate a report; inspect output above.')
+report = pointer.read_text().strip()
 display(HTML(filename=report))
 ```
+
+Unlike notebook `!` commands, `check=True` stops the cell if pulling, dependency
+installation or inference fails. The included notebook also displays fresh
+partial reports on backend failure and rejects stale reports from earlier runs.
+
+If `git pull` says local `pyproject.toml` edits would be overwritten, save those
+edits first, then rerun the cell above:
+
+```python
+subprocess.run(['git', 'stash', 'push', '-m', 'kaggle-pyproject-before-benchmark',
+                '--', 'pyproject.toml'], cwd=repo, check=True)
+```
+
+The local configuration edits remain in the stash (`git stash list` and
+`git stash show -p` to inspect). Review and merge any Kaggle-specific dependency
+adjustments with the updated configuration before restoring them; blindly
+restoring the old file would remove the new `benchmark` extra.
 
 A bare `uv run demo.py` on Kaggle runs all three backends against
 `/kaggle/working/data/02_2_3_obj`, with `02_2_3obj` accepted as an alternate name.
